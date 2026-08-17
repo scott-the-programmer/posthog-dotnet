@@ -904,6 +904,46 @@ public class TheEvaluateFeatureFlagMethod
                 personProperties: properties);
         });
     }
+
+    // A fractional rollout such as 0.1% has to survive deserialization and bucketing.
+    // `user-2912` hashes to ~0.0000142 (inside 0.1%) and `user-212` to ~0.0042866
+    // (outside 0.1%, but inside 0.5%). Truncating the percentage to an integer would
+    // put both users outside the bucket.
+    [Theory]
+    [InlineData("0.1", "user-2912", true)]
+    [InlineData("0.1", "user-212", false)]
+    [InlineData("0.5", "user-212", true)]
+    public void MatchesFractionalRolloutPercentage(string rolloutPercentage, string distinctId, bool expected)
+    {
+        var json = $$"""
+        {
+            "flags": [
+                {
+                    "id": 42,
+                    "team_id": 23,
+                    "name": "fractional-rollout-feature-flag",
+                    "key": "fractional-rollout",
+                    "active": true,
+                    "filters": {
+                        "groups": [
+                            {
+                                "properties": [],
+                                "rollout_percentage": {{rolloutPercentage}}
+                            }
+                        ]
+                    }
+                }
+            ],
+            "group_type_mapping": {}
+        }
+        """;
+        var flags = JsonSerializer.Deserialize<LocalEvaluationApiResult>(json, JsonSerializerHelper.Options)!;
+        var localEvaluator = new LocalEvaluator(flags);
+
+        var result = localEvaluator.EvaluateFeatureFlag(key: "fractional-rollout", distinctId: distinctId);
+
+        Assert.Equal(expected, result);
+    }
 }
 
 public class TheMixedTargetingEvaluation
