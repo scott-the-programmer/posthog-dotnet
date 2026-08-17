@@ -1,5 +1,11 @@
 # PostHog
 
+## 2.13.4
+
+### Patch Changes
+
+- 4884199: Add regression coverage for rollout percentage boundaries (`100.0`, `0.0`, and `null`) after widening `rollout_percentage` to a `double?`.
+
 ## 2.13.3
 
 ### Patch Changes
