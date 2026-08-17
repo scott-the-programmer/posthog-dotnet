@@ -1,5 +1,11 @@
 # PostHog
 
+## 2.13.3
+
+### Patch Changes
+
+- 14ea26f: Support fractional rollout percentages (for example `0.1`) when deserializing local evaluation payloads.
+
 ## 2.13.2
 
 ### Patch Changes
