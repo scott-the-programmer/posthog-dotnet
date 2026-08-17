@@ -944,6 +944,48 @@ public class TheEvaluateFeatureFlagMethod
 
         Assert.Equal(expected, result);
     }
+
+    // The boundaries have to keep behaving after widening the percentage to a double:
+    // 100.0 lets everybody through, 0.0 lets nobody through, and an explicit null is
+    // treated as an unbounded rollout.
+    [Theory]
+    [InlineData("100.0", "user-2912", true)]
+    [InlineData("100.0", "user-212", true)]
+    [InlineData("0.0", "user-2912", false)]
+    [InlineData("0.0", "user-212", false)]
+    [InlineData("null", "user-2912", true)]
+    [InlineData("null", "user-212", true)]
+    public void MatchesBoundaryRolloutPercentage(string rolloutPercentage, string distinctId, bool expected)
+    {
+        var json = $$"""
+        {
+            "flags": [
+                {
+                    "id": 42,
+                    "team_id": 23,
+                    "name": "boundary-rollout-feature-flag",
+                    "key": "boundary-rollout",
+                    "active": true,
+                    "filters": {
+                        "groups": [
+                            {
+                                "properties": [],
+                                "rollout_percentage": {{rolloutPercentage}}
+                            }
+                        ]
+                    }
+                }
+            ],
+            "group_type_mapping": {}
+        }
+        """;
+        var flags = JsonSerializer.Deserialize<LocalEvaluationApiResult>(json, JsonSerializerHelper.Options)!;
+        var localEvaluator = new LocalEvaluator(flags);
+
+        var result = localEvaluator.EvaluateFeatureFlag(key: "boundary-rollout", distinctId: distinctId);
+
+        Assert.Equal(expected, result);
+    }
 }
 
 public class TheMixedTargetingEvaluation
