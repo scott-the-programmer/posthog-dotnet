@@ -2,6 +2,10 @@
 
 This repository uses [Changesets](https://github.com/changesets/changesets) for version management and an automated GitHub Actions workflow for NuGet releases.
 
+Packages are published to this repository's **GitHub Packages** NuGet feed
+(`https://nuget.pkg.github.com/<owner>/index.json`), authenticated with the workflow's
+built-in `GITHUB_TOKEN`. No additional secrets are required.
+
 ## Packages
 
 This repo publishes three NuGet packages independently:
@@ -53,18 +57,42 @@ Fix OpenAI tracing metadata.
 After review, merge the PR to `main`. A push to `main` that includes `.changeset/*.md` changes automatically starts the release workflow. The workflow then:
 
 1. Checks for pending changesets.
-2. Notifies the client libraries team in Slack for approval.
-3. Waits for approval from a maintainer via the GitHub `Release` environment.
-4. Runs `pnpm changeset version` to update the selected package `package.json` versions and changelogs.
-5. Syncs those versions into the matching `.csproj` files.
-6. Builds and tests the solution.
-7. Commits the version bump to `main`.
-8. Publishes only the packages whose package versions changed.
-9. Creates package-specific GitHub releases and tags, for example `PostHog-v2.6.1` or `PostHog.AI-v0.1.1`.
+2. Runs `pnpm changeset version` to update the selected package `package.json` versions and changelogs.
+3. Syncs those versions into the matching `.csproj` files.
+4. Builds and tests the solution.
+5. Commits the version bump to `main` as `chore: update package versions [version bump] [skip ci]`.
+6. Publishes only the packages whose package versions changed, to GitHub Packages.
+7. Creates package-specific GitHub releases and tags, for example `PostHog-v2.6.1` or `PostHog.AI-v0.1.1`, with the `.nupkg` attached as a release asset.
+
+The release is fully automatic once the changeset lands on `main` — there is no approval gate.
 
 ### Manual trigger
 
 You can manually trigger the release workflow from the Actions tab with `workflow_dispatch`. Manual runs still require pending changesets.
+
+## Repository prerequisites
+
+One-time setup, required for the workflow to be able to commit and publish:
+
+- **Settings → Actions → General → Workflow permissions**: set to *Read and write permissions*.
+  Without this, `GITHUB_TOKEN` cannot commit the version bump or push release tags.
+- If `main` is a protected branch, allow the version-bump commit through (or exempt GitHub Actions),
+  otherwise the version-bump step fails.
+
+## Consuming the published packages
+
+GitHub Packages requires authentication even for public packages. Consumers need a personal access
+token with the `read:packages` scope, and a NuGet source pointing at the feed:
+
+```bash
+dotnet nuget add source "https://nuget.pkg.github.com/<owner>/index.json" \
+  --name github \
+  --username <github-username> \
+  --password <token-with-read:packages> \
+  --store-password-in-clear-text
+```
+
+Alternatively, download the `.nupkg` attached to the corresponding GitHub release.
 
 ## Important notes
 

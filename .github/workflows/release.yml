@@ -41,28 +41,13 @@ jobs:
             echo "No changesets to release"
           fi
 
-  notify-approval-needed:
-    name: Notify Slack - Approval Needed
-    needs: check-changesets
-    if: needs.check-changesets.outputs.has-changesets == 'true'
-    uses: posthog/.github/.github/workflows/notify-approval-needed.yml@5fc4680761e8ac29a61b212756230eba0e276d8c
-    with:
-      slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
-      slack_user_group_id: ${{ vars.GROUP_CLIENT_LIBRARIES_SLACK_GROUP_ID }}
-    secrets:
-      slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
-      posthog_project_api_key: ${{ secrets.POSTHOG_PROJECT_API_KEY }}
-
   version-bump:
     name: Bump versions and commit to main
-    needs: [check-changesets, notify-approval-needed]
+    needs: check-changesets
     runs-on: ubuntu-latest
-    if: always() && needs.check-changesets.outputs.has-changesets == 'true'
-    environment: Release
+    if: needs.check-changesets.outputs.has-changesets == 'true'
     permissions:
       contents: write
-      actions: write
-      id-token: write
     outputs:
       committed: ${{ steps.version-bump-outputs.outputs.committed }}
       commit-sha: ${{ steps.version-bump-outputs.outputs.commit-sha }}
@@ -71,29 +56,11 @@ jobs:
       DOTNET_NOLOGO: true
       DOTNET_VERSION: "9.0.102"
     steps:
-      - name: Notify Slack - Approved
-        if: needs.notify-approval-needed.outputs.slack_ts != ''
-        uses: posthog/.github/.github/actions/slack-thread-reply@cb0979b67dcd585828b61ac45927eef4da8f6287 # main
-        with:
-          slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
-          slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
-          thread_ts: ${{ needs.notify-approval-needed.outputs.slack_ts }}
-          message: "✅ Release approved! Version bump in progress..."
-          emoji_reaction: "white_check_mark"
-
-      - name: Get GitHub App token
-        id: releaser
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          client-id: ${{ secrets.GH_APP_POSTHOG_DOTNET_RELEASER_APP_ID }}
-          private-key: ${{ secrets.GH_APP_POSTHOG_DOTNET_RELEASER_PRIVATE_KEY }}
-
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           fetch-depth: 0
-          token: ${{ steps.releaser.outputs.token }}
 
       - name: Configure Git
         run: |
@@ -168,7 +135,7 @@ jobs:
           repo: ${{ github.repository }}
           branch: main
         env:
-          GITHUB_TOKEN: ${{ steps.releaser.outputs.token }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set version bump outputs
         id: version-bump-outputs
@@ -184,74 +151,23 @@ jobs:
             echo "commit-sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Resolve release failure metadata
-        id: release-failure-metadata
-        if: failure()
-        run: |
-          set -euo pipefail
-          package_name=""
-          package_version=""
-          separator=""
-          for package_json in src/PostHog/package.json src/PostHog.AspNetCore/package.json src/PostHog.AI/package.json; do
-            if [ -f "$package_json" ]; then
-              package_name_part=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("name", ""))' "$package_json")
-              version=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("version", ""))' "$package_json")
-              if [ -n "$package_name_part" ] && [ -n "$version" ]; then
-                package_name="${package_name}${separator}${package_name_part}"
-                package_version="${package_version}${separator}${package_name_part}@v${version}"
-                separator=", "
-              fi
-            fi
-          done
-          echo "package_name=$package_name" >> "$GITHUB_OUTPUT"
-          echo "package_version=$package_version" >> "$GITHUB_OUTPUT"
-
-      - name: Send failure event to PostHog
-        if: failure()
-        continue-on-error: true
-        uses: PostHog/posthog-github-action@9a6a19d360820ab4d95ecc4a5a7564062c895f84 # v1.3.0
-        with:
-          posthog-token: "${{ secrets.POSTHOG_PROJECT_API_KEY }}"
-          event: "posthog-sdk-github-release-workflow-failure"
-          properties: >-
-            {
-              "commitSha": "${{ github.sha }}",
-              "jobStatus": "${{ job.status }}",
-              "ref": "${{ github.ref }}",
-              "repository": "${{ github.repository }}",
-              "sdk": "posthog-dotnet",
-              "jobName": "version-bump",
-              "packageName": "${{ steps.release-failure-metadata.outputs.package_name || 'unknown' }}",
-              "packageVersion": "${{ steps.release-failure-metadata.outputs.package_version || 'unknown' }}",
-              "actionUrl": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}",
-              "alertText": ":rotating_light: Failed to prepare release for posthog-dotnet :rotating_light:",
-              "alertContext": "The version bump/changelog step failed before packages were published."
-            }
-
-      - name: Notify Slack - Failed
-        if: failure() && needs.notify-approval-needed.outputs.slack_ts != ''
-        uses: posthog/.github/.github/actions/slack-thread-reply@cb0979b67dcd585828b61ac45927eef4da8f6287 # main
-        with:
-          slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
-          slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
-          thread_ts: ${{ needs.notify-approval-needed.outputs.slack_ts }}
-          message: "❌ Failed to bump versions for `posthog-dotnet`! <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View logs>"
-          emoji_reaction: "x"
-
   publish:
     name: Publish packages
-    needs: [version-bump, notify-approval-needed]
+    needs: version-bump
     runs-on: ubuntu-latest
-    if: always() && needs.version-bump.outputs.committed == 'true'
+    if: needs.version-bump.outputs.committed == 'true'
     permissions:
       contents: write
-      actions: write
-      id-token: write
+      packages: write
     env:
       DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
       DOTNET_NOLOGO: true
       DOTNET_VERSION: "9.0.102"
       PackageDirectory: ${{ github.workspace }}/build/packages/Release
+      # GitHub Packages resolves the owning repository from the <repository> URL
+      # baked into the .nupkg, so it must point at this repo rather than upstream.
+      PackageRepositoryUrl: https://github.com/${{ github.repository }}
+      NuGetFeed: https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json
     strategy:
       # If any package fails to publish, stop immediately. PostHog must publish before dependents.
       fail-fast: true
@@ -323,29 +239,31 @@ jobs:
 
       - name: Build and pack ${{ matrix.package.name }}
         if: steps.detect-version.outputs.has-new-version == 'true'
-        run: dotnet build "${{ matrix.package.project }}" --configuration Release --no-restore
+        run: |
+          dotnet build "${{ matrix.package.project }}" \
+            --configuration Release \
+            --no-restore \
+            -p:RepositoryUrl="${{ env.PackageRepositoryUrl }}"
 
-      - name: NuGet login
-        if: steps.detect-version.outputs.has-new-version == 'true'
-        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
-        id: login
-        with:
-          user: PostHog-Engineering
-
-      - name: Publish ${{ matrix.package.name }} to NuGet
+      - name: Publish ${{ matrix.package.name }} to GitHub Packages
         if: steps.detect-version.outputs.has-new-version == 'true'
         env:
-          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
+          NUGET_API_KEY: ${{ secrets.GITHUB_TOKEN }}
           PACKAGE_NAME: ${{ matrix.package.name }}
           PACKAGE_VERSION: ${{ steps.detect-version.outputs.version }}
         run: |
+          set -euo pipefail
+
           package_file="${{ env.PackageDirectory }}/${PACKAGE_NAME}.${PACKAGE_VERSION}.nupkg"
           if [ ! -f "$package_file" ]; then
             echo "Package file not found: $package_file" >&2
             find "${{ env.PackageDirectory }}" -type f -name '*.nupkg' -print >&2 || true
             exit 1
           fi
-          dotnet nuget push "$package_file" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
+          dotnet nuget push "$package_file" \
+            --api-key "$NUGET_API_KEY" \
+            --source "${{ env.NuGetFeed }}" \
+            --skip-duplicate
 
       - name: Tag and push ${{ matrix.package.name }}
         if: steps.detect-version.outputs.has-new-version == 'true'
@@ -377,93 +295,5 @@ jobs:
           gh release create "$RELEASE_TAG" \
             --target "${{ needs.version-bump.outputs.commit-sha }}" \
             --title "$RELEASE_TAG" \
-            --notes-file release-notes.md
-
-      - name: Send failure event to PostHog
-        if: failure()
-        continue-on-error: true
-        uses: PostHog/posthog-github-action@9a6a19d360820ab4d95ecc4a5a7564062c895f84 # v1.3.0
-        with:
-          posthog-token: "${{ secrets.POSTHOG_PROJECT_API_KEY }}"
-          event: "posthog-sdk-github-release-workflow-failure"
-          properties: >-
-            {
-              "commitSha": "${{ github.sha }}",
-              "jobStatus": "${{ job.status }}",
-              "ref": "${{ github.ref }}",
-              "repository": "${{ github.repository }}",
-              "sdk": "posthog-dotnet",
-              "jobName": "publish",
-              "packageName": "${{ matrix.package.name }}",
-              "packageVersion": "${{ steps.detect-version.outputs.version || 'unknown' }}",
-              "actionUrl": "https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}",
-              "alertText": ":rotating_light: Failed to release ${{ matrix.package.name }}@${{ steps.detect-version.outputs.version }} :rotating_light:",
-              "alertContext": "The package publish step failed."
-            }
-
-      - name: Notify Slack - Failed
-        if: failure() && needs.notify-approval-needed.outputs.slack_ts != ''
-        uses: posthog/.github/.github/actions/slack-thread-reply@cb0979b67dcd585828b61ac45927eef4da8f6287 # main
-        with:
-          slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
-          slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
-          thread_ts: ${{ needs.notify-approval-needed.outputs.slack_ts }}
-          message: "❌ Failed to release `${{ matrix.package.name }}@${{ steps.detect-version.outputs.version }}`! <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View logs>"
-          emoji_reaction: "x"
-
-  notify-rejected:
-    name: Notify Slack - Rejected
-    needs: [version-bump, notify-approval-needed]
-    runs-on: ubuntu-latest
-    if: always() && (needs.version-bump.result == 'failure' || needs.version-bump.result == 'skipped') && needs.notify-approval-needed.outputs.slack_ts != ''
-    steps:
-      - name: Check for rejection
-        id: check-rejection
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GITHUB_REPOSITORY_NAME: ${{ github.repository }}
-          GITHUB_RUN_ID_VALUE: ${{ github.run_id }}
-        run: |
-          RESPONSE=$(gh api "/repos/$GITHUB_REPOSITORY_NAME/actions/runs/$GITHUB_RUN_ID_VALUE/approvals")
-          REJECTED=$(echo "$RESPONSE" | jq '[.[] | select(.state == "rejected")] | length')
-          if [ "$REJECTED" -gt 0 ]; then
-            echo "was_rejected=true" >> "$GITHUB_OUTPUT"
-            COMMENT=$(echo "$RESPONSE" | jq -r '.[] | select(.state == "rejected") | .comment // empty' | head -1)
-            if [ -n "$COMMENT" ]; then
-              {
-                echo 'message<<EOF'
-                echo "🚫 Release was rejected: $COMMENT"
-                echo 'EOF'
-              } >> "$GITHUB_OUTPUT"
-            else
-              echo "message=🚫 Release was rejected." >> "$GITHUB_OUTPUT"
-            fi
-          else
-            echo "was_rejected=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Notify Slack - Rejected
-        if: steps.check-rejection.outputs.was_rejected == 'true'
-        continue-on-error: true
-        uses: posthog/.github/.github/actions/slack-thread-reply@cb0979b67dcd585828b61ac45927eef4da8f6287 # main
-        with:
-          slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
-          slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
-          thread_ts: ${{ needs.notify-approval-needed.outputs.slack_ts }}
-          message: '${{ steps.check-rejection.outputs.message }}'
-          emoji_reaction: 'no_entry_sign'
-
-  notify-released:
-    name: Notify Slack - Released
-    needs: [notify-approval-needed, publish]
-    runs-on: ubuntu-latest
-    if: always() && needs.publish.result == 'success' && needs.notify-approval-needed.outputs.slack_ts != ''
-    steps:
-      - name: Notify Slack - Released
-        uses: posthog/.github/.github/actions/slack-thread-reply@cb0979b67dcd585828b61ac45927eef4da8f6287 # main
-        with:
-          slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
-          slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
-          thread_ts: ${{ needs.notify-approval-needed.outputs.slack_ts }}
-          message: "🚀 Released updated posthog-dotnet packages successfully!"
-          emoji_reaction: "rocket"
+            --notes-file release-notes.md \
+            "${{ env.PackageDirectory }}/${{ matrix.package.name }}.${{ steps.detect-version.outputs.version }}.nupkg"
